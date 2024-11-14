@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Python Code Display</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        pre, code {
+            display: block;
+            background-color: #f8f8f8;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            font-size: 14px;
+            white-space: pre;
+            overflow-x: auto;
+            font-family: "Courier New", Courier, monospace;
+        }
+    </style>
+</head>
+<body>
+
+<h2>Python Code for Monte Carlo Simulation</h2>
+<pre><code>
+import numpy as np
+import math
+from scipy.stats import skewnorm
+import pandas as pd
+
+# Parameters
+principal = 1000000
+bpce_rate = 0.05320573
+gain_from_zcb = principal * (1 - 1 / (1 + bpce_rate))
+
+# BTC
+BTCmultiplier = 6.414769524  # 1M can buy how many BTC structured note
+S0_btc = 63329
+K_put_btc = 50000
+K_call_low_btc = 60000
+K_call_high_btc = 70000
+sigma_btc = 0.027  # historical_volatility of BTC on 2024.9.30
+notional_btc = 148015
+timesteps_BTC = 365  # for BTC
+skewness = 2
+# Simulate price paths
+payoffs_btc = []
+drawdowns_btc = []
+
+# BSX
+S0_bsx = 83.82
+K_put_bsx = 80
+K_call_low_bsx = 90
+K_call_high_bsx = 95
+bullish_multiplier = 1.01
+sigma_bsx = 0.0174086
+timesteps_others = 252  # no. of trading days
+notional_bsx = 1000000
+payoffs_bsx = []
+drawdowns_bsx = []
+
+# CAT Bond
+S0_cat_trancheB = 100.928
+S0_cat_trancheA = 103.299
+sigma_cat_trancheA = 0.002409  # historical volatility of CAT Bond (tranche A) based only on historical price data
+sigma_cat_trancheB = 0.003743  # historical volatility of CAT Bond (tranche B) based only on historical price data
+attachment_probability_tranche_A = 0.0268  # 2.68% annual probability of catastrophe event for tranche A
+expected_loss_tranche_A = 0.0162  # 1.62% expected loss of bond value if event occurs for tranche A
+attachment_probability_tranche_B = 0.0435  # 4.35% annual probability of catastrophe event for tranche B
+expected_loss_tranche_B = 0.0336  # 3.36% expected loss of bond value if event occurs for tranche B
+notional_cat_trancheB = 100.928
+notional_cat_trancheA = 103.299
+payoffs_cat_A = []
+drawdowns_cat_A = []
+payoffs_cat_B = []
+drawdowns_cat_B = []
+volatility_list_btc = []
+volatility_list_bsx = []
+volatility_list_bondA = []
+volatility_list_bondB = []
+
+T = 1  # 1 year
+r = 0.0532  # risk free rate taken 52 WEEKS BANK Daily Treasury Bill Rates on 2024.9.30
+num_simulations = 10000
+
+
+def skewness_calculation(historical_price_filepath: str):
+    data = pd.read_csv(historical_price_filepath)
+
+    returns = data['Close'].pct_change(fill_method=None).dropna()
+
+    # Fit a skew-normal distribution to the returns
+    shape, loc, scale = skewnorm.fit(returns)
+
+    # print(f"Shape (skewness): {shape}")
+    return shape
+
+
+bsx_skew = skewness_calculation("BSX_historical_prices.csv")
+
+for i in range(num_simulations + 1):
+    if i % 100 == 0 and i != 0:
+        print(f"{i} simulations done. Num of simulations left:{num_simulations - i}")
+    S_btc = S0_btc
+    S_bsx = S0_bsx
+    s_cat_trancheA = S0_cat_trancheA
+    s_cat_trancheB = S0_cat_trancheB
+
+    peak_payoff_btc = 0
+    peak_payoff_bsx = 0
+    peak_payoff_catA = 0
+    peak_payoff_catB = 0
+
+    max_drawdown_btc = 0  # Track maximum drawdown for this simulation
+    max_drawdown_bsx = 0
+    max_drawdown_cat_trancheA = 0
+    max_drawdown_cat_trancheB = 0
+
+    daily_payoff_list_btc = []
+    daily_payoff_list_bsx = []
+    daily_payoff_list_catA = []
+    daily_payoff_list_catB = []
+
+    #####-------------------------------------------------BTC----------------------------------------------
+    previous_payoff = notional_btc
+
+    for t in range(1, timesteps_BTC + 1):
+        Z = np.random.normal(0, 1)
+
+        S_btc *= np.exp((r - 0.5 * sigma_btc ** 2) * (1 / timesteps_BTC) + sigma_btc * np.sqrt(1 / timesteps_BTC) * Z)
+
+        # Calculate payoff at each timestep
+        if S_btc < K_put_btc:
+            daily_payoff = (-(K_put_btc - S_btc) * 3 + 1985) * BTCmultiplier + gain_from_zcb  # Loss from puts
+        elif S_btc < K_call_low_btc:
+            daily_payoff = 1985 * BTCmultiplier + gain_from_zcb  # No loss, no gain
+        elif S_btc < K_call_high_btc:
+            daily_payoff = ((S_btc - K_call_low_btc) * 5 + 1985) * BTCmultiplier + gain_from_zcb  # Gain from low calls
+        else:
+            daily_payoff = 383989.6826  # Capped paySoff
+
+        # Update peak payoff and calculate drawdown
+        if daily_payoff > peak_payoff_btc:
+            peak_payoff_btc = daily_payoff
+
+        # Calculate current drawdown based on the payoff
+
+        current_drawdown = (peak_payoff_btc - daily_payoff) / peak_payoff_btc if peak_payoff_btc > 0 else 0
+        max_drawdown_btc = max(max_drawdown_btc, current_drawdown)  # Update maximum drawdown
+        daily_payoff_list_btc.append(daily_payoff + notional_btc)
+
+        previous_payoff = daily_payoff + notional_btc
+
+    volatility = np.std(daily_payoff_list_btc)/notional_btc
+    # print(f"BTC volatility:{volatility}",end=" ")
+
+    volatility_list_btc.append(volatility)
+    # Calculate final payoff at maturity (if needed, else can be ignored)
+
+    final_payoff = (daily_payoff) / 949482  # Last calculated daily payoff
+    payoffs_btc.append(final_payoff)
+    drawdowns_btc.append(max_drawdown_btc)  # Store the maximum drawdown for this simulation
+
+    previous_payoff = notional_bsx
+
+    #####-------------------------------------------------BSX----------------------------------------------
+    for t in range(1, timesteps_others + 1):
+        Z = skewnorm.rvs(a=bsx_skew)
+
+        S_bsx *= np.exp(
+            (r - 0.5 * sigma_bsx ** 2) * (1 / timesteps_others) + sigma_bsx * np.sqrt(1 / timesteps_others) * Z)
+
+        # Calculate payoff at each timestep
+        if S_bsx < K_put_bsx:
+            daily_payoff = -(K_put_bsx - S_bsx) * 12500  # Loss from puts
+        elif S_bsx < K_call_low_bsx:
+            daily_payoff = 0  # No loss, no gain
+        elif S_bsx < K_call_high_bsx:
+            daily_payoff = (S_bsx - K_call_low_bsx) * 12500  # Gain from low calls
+        else:
+            daily_payoff = (S_bsx - K_call_low_bsx) * 12500 + (S_bsx - K_call_high_bsx) * 8053
+
+
+        # Update peak payoff and calculate drawdown
+        if daily_payoff > peak_payoff_bsx:
+            peak_payoff_bsx = daily_payoff
+
+        # Calculate current drawdown based on the payoff
+        current_drawdown = (peak_payoff_bsx - daily_payoff) / peak_payoff_bsx if peak_payoff_bsx > 0 else 0
+        max_drawdown_bsx = max(max_drawdown_bsx, current_drawdown)  # Update maximum drawdown
+
+        daily_payoff_list_bsx.append(daily_payoff+notional_bsx)
+
+        previous_payoff = daily_payoff + notional_bsx
+
+
+
+
+    volatility = (np.std(daily_payoff_list_bsx))/notional_bsx
+    # print(f"BSX volatility:{volatility}")
+
+    volatility_list_bsx.append(volatility)
+    # Calculate final payoff at maturity (if needed, else can be ignored)
+    final_payoff = (daily_payoff) / notional_bsx  # Last calculated daily payoff
+    payoffs_bsx.append(final_payoff)
+    drawdowns_bsx.append(max_drawdown_bsx)  # Store the maximum drawdown for this simulation
+
+    previous_payoff = notional_cat_trancheA
+
+    #####----------------------------------------Catastrophe Bond Tranche A----------------------------------
+    daily_attachment_probability_estimate_trancheA = 1 - (1 - attachment_probability_tranche_A) ** (
+                1 / timesteps_others)
+
+    for t in range(1, timesteps_others + 1):
+        Z = np.random.normal(0, 1)
+        original_value = s_cat_trancheA
+        s_cat_trancheA *= np.exp(
+            (r - 0.5 * sigma_cat_trancheA ** 2) * (1 / timesteps_others) + sigma_cat_trancheA * np.sqrt(
+                1 / timesteps_others) * Z)
+
+        # Catastrophe event check (based on daily probability)
+        if np.random.uniform(0, 1) < daily_attachment_probability_estimate_trancheA:
+            # print("Indemnity Triggered for tranche A")
+            s_cat_trancheA *= (1 - expected_loss_tranche_A)  # Apply expected loss if event occurs
+
+        daily_payoff = s_cat_trancheA
+
+        # Update peak payoff and calculate drawdown
+        if daily_payoff > peak_payoff_catA:
+            peak_payoff_catA = daily_payoff
+
+        # Calculate current drawdown based on the payoff
+        current_drawdown = (peak_payoff_catA - daily_payoff) / peak_payoff_catA if peak_payoff_catA > 0 else 0
+        max_drawdown_cat_trancheA = max(max_drawdown_cat_trancheA, current_drawdown)  # Update maximum drawdown
+        daily_payoff_list_catA.append(daily_payoff)
+
+        previous_payoff = daily_payoff
+
+    volatility = np.std(daily_payoff_list_catA)/notional_cat_trancheA
+    volatility_list_bondA.append(volatility)
+    # Calculate final payoff at maturity (if needed, else can be ignored)
+    final_payoff = (daily_payoff - notional_cat_trancheA) / notional_cat_trancheA  # Last calculated daily payoff
+    payoffs_cat_A.append(final_payoff)
+    drawdowns_cat_A.append(max_drawdown_cat_trancheB)  # Store the maximum drawdown for this simulation
+
+    previous_payoff = notional_cat_trancheB
+    #####----------------------------------------Catastrophe Bond Tranche B----------------------------------
+    daily_attachment_probability_estimate_trancheB = 1 - (1 - attachment_probability_tranche_B) ** (
+                1 / timesteps_others)
+
+    for t in range(1, timesteps_others + 1):
+        Z = np.random.normal(0, 1)
+        original_value = s_cat_trancheB
+        s_cat_trancheB *= np.exp(
+            (r - 0.5 * sigma_cat_trancheB ** 2) * (1 / timesteps_others) + sigma_cat_trancheB * np.sqrt(
+                1 / timesteps_others) * Z)
+
+        # Catastrophe event check (based on daily probability)
+        if np.random.uniform(0, 1) < daily_attachment_probability_estimate_trancheB:
+            # print("Indemnity Triggered for tranche B")
+            s_cat_trancheB *= (1 - expected_loss_tranche_B)  # Apply expected loss if event occurs
+
+        daily_payoff = s_cat_trancheB
+
+        # Update peak payoff and calculate drawdown
+        if daily_payoff > peak_payoff_catB:
+            peak_payoff_catB = daily_payoff
+
+        # Calculate current drawdown based on the payoff
+
+        current_drawdown = (peak_payoff_catB - daily_payoff) / peak_payoff_catB if peak_payoff_catB > 0 else 0
+        max_drawdown_cat_trancheB = max(max_drawdown_cat_trancheB, current_drawdown)  # Update maximum drawdown
+        daily_payoff_list_catB.append(daily_payoff)
+
+        previous_payoff = daily_payoff
+
+
+    volatility = np.std(daily_payoff_list_catB)/notional_cat_trancheB
+    volatility_list_bondB.append(volatility)
+    # Calculate final payoff at maturity (if needed, else can be ignored)
+    final_payoff = (daily_payoff - notional_cat_trancheB) / notional_cat_trancheB  # Last calculated daily payoff
+    payoffs_cat_B.append(final_payoff)
+    drawdowns_cat_B.append(max_drawdown_cat_trancheB)  # Store the maximum drawdown for this simulation
+
+# Calculate average and standard deviation of payoffs_btc
+expected_payoff_btc = np.mean(payoffs_btc)
+
+volatility_btc = np.mean(volatility_list_btc)
+
+expected_payoff_bsx = np.mean(payoffs_bsx)
+volatility_bsx = np.mean(volatility_list_bsx)
+
+volatility_cat_trancheA = np.mean(volatility_list_bondA)
+
+volatility_cat_trancheB = np.mean(volatility_list_bondB)
+TrancheA_YTM = 0.1531  # YTM of tranche A
+TrancheB_YTM = 0.2428  # YTM of tranche B
+# Calculate average drawdown
+max_drawdown_btc = np.mean(drawdowns_btc)
+max_drawdown_bsx = np.mean(drawdowns_bsx)
+max_drawdown_cat_trancheB = np.mean(drawdowns_cat_B)
+
+portfolio_return = 0.4 * expected_payoff_bsx + 0.4 * expected_payoff_btc + 0.08 * TrancheA_YTM + 0.12 * TrancheB_YTM
+portfolio_std = math.sqrt((0.4 ** 2) * (volatility_btc ** 2) + (0.4 ** 2) * (volatility_bsx ** 2) + (0.08 ** 2) * (
+            volatility_cat_trancheA ** 2) + (0.12 ** 2) * (volatility_cat_trancheB ** 2))
+print(
+    f"BTC: Expected Payoff: {expected_payoff_btc}, Volatility: {volatility_btc}, Average Drawdown: {max_drawdown_btc}")
+print(
+    f"BSX: Expected Payoff: {expected_payoff_bsx}, Volatility: {volatility_bsx}, Average Drawdown: {max_drawdown_bsx}")
+print(
+    f"CAT Bond Tranche A: Volatility: {volatility_cat_trancheA}, Average Drawdown: {max_drawdown_cat_trancheA}")
+print(
+    f"CAT Bond Tranche B: Volatility: {volatility_cat_trancheB}, Average Drawdown: {max_drawdown_cat_trancheB}")
+print(f"Portfolio return:{portfolio_return} Portfolio volatility: {portfolio_std}")
+
+</code></pre>
+
+</body>
+</html>
